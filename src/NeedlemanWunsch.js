@@ -196,385 +196,467 @@ const SequenceAlignmentTool = () => {
     return needlemanWunsch(s1, s2);
   };
 
-  const runAlignment = () => {
-    const s1 = seq1.toUpperCase();
-    const s2 = seq2.toUpperCase();
-
-    let res;
-    switch (algorithm) {
-      case 'needleman-wunsch':
-        res = needlemanWunsch(s1, s2);
-        break;
-      case 'smith-waterman':
-        res = smithWaterman(s1, s2);
-        break;
-      case 'hirschberg':
-        res = hirschberg(s1, s2);
-        break;
-      default:
-        res = needlemanWunsch(s1, s2);
-    }
-
-    setMatrix(res.matrix);
-    setTraceback(res.traceback);
-    setResult(res);
-    setAnimationStep(0);
-  };
-
-  const startAnimation = () => {
-    setIsAnimating(true);
-    setIsPaused(false);
-    setAnimationStep(0);
-  };
-
-  useEffect(() => {
-    if (isAnimating && !isPaused && animationStep < traceback.length) {
-      const timer = setTimeout(() => {
-        setAnimationStep(prev => prev + 1);
-      }, animationSpeed);
-      return () => clearTimeout(timer);
-    } else if (animationStep >= traceback.length) {
-      setIsAnimating(false);
-    }
-  }, [isAnimating, isPaused, animationStep, traceback.length, animationSpeed]);
-
-  const downloadCSV = () => {
-    if (!result) return;
+  const gotoh = (s1, s2) => {
+    const m = s1.length;
+    const n = s2.length;
+    const d = gapOpenPenalty;
+    const e = gapExtendPenalty;
     
-    let csv = 'Algorithm,Scoring Scheme,Score,Identity,Alignment\n';
-    csv += `${algorithm},${scoringScheme},${result.score},${calculateIdentity()}%,\n`;
-    csv += `Sequence 1:,${result.align1}\n`;
-    csv += `Match:,${result.match}\n`;
-    csv += `Sequence 2:,${result.align2}\n`;
+    // Three matrices: M (match/mismatch), Ix (gap in s1), Iy (gap in s2)
+    const M = Array(m + 1).fill(null).map(() => Array(n + 1).fill(-Infinity));
+    const Ix = Array(m + 1).fill(null).map(() => Array(n + 1).fill(-Infinity));
+    const Iy = Array(m + 1).fill(null).map(() => Array(n + 1).fill(-Infinity));
     
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'alignment_result.csv';
-    a.click();
-  };
-
-  const calculateIdentity = () => {
-    if (!result) return 0;
-    let matches = 0;
-    for (let i = 0; i < result.match.length; i++) {
-      if (result.match[i] === '|') matches++;
+    // Initialize
+    M[0][0] = 0;
+    for (let i = 1; i <= m; i++) {
+      Ix[i][0] = d + i * e;
     }
-    return ((matches / result.match.length) * 100).toFixed(1);
-  };
+    for (let j = 1; j <= n; j++) {
+      Iy[0][j] = d + j * e;
+    }
+    
+    // Fill matrices
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        M[i][j] = getScore(s1[i-1], s2[j-1]) + Math.max(M[i-1][j-1], Ix[i-1][j-1], Iy[i-1][j-1]);
+        Ix[i][j] = Math.max(M[i-1][j] + d + e, Ix[i-1][j] + e);
+        Iy[i][j] = Math.max(M[i][j-1] + d + e, Iy[i][j-1] + e);
+      }
+    }
+    
+    // Find best score
+    const finalScore = Math.max(M[m][n], Ix[m][n], Iy[m][n]);
+    // Traceback
+let i = m, j = n;
+let align1 = '', align2 = '', match = '';
+const path = [];
+let currentMatrix = M[m][n] >= Ix[m][n] && M[m][n] >= Iy[m][n] ? 'M' : (Ix[m][n] >= Iy[m][n] ? 'Ix' : 'Iy');
 
-  const calculateTime = () => {
-    return (seq1.length * seq2.length * 0.001).toFixed(2);
-  };
+while (i > 0 || j > 0) {
+  path.push([i, j]);
+  
+  if (currentMatrix === 'M' && i > 0 && j > 0) {
+    align1 = s1[i-1] + align1;
+    align2 = s2[j-1] + align2;
+    match = (s1[i-1] === s2[j-1] ? '|' : ' ') + match;
+    
+    const prevScore = M[i][j] - getScore(s1[i-1], s2[j-1]);
+    if (Math.abs(prevScore - M[i-1][j-1]) < 0.001) currentMatrix = 'M';
+    else if (Math.abs(prevScore - Ix[i-1][j-1]) < 0.001) currentMatrix = 'Ix';
+    else currentMatrix = 'Iy';
+    
+    i--; j--;
+  } else if (currentMatrix === 'Ix' && i > 0) {
+    align1 = s1[i-1] + align1;
+    align2 = '-' + align2;
+    match = ' ' + match;
+    
+    if (Math.abs(Ix[i][j] - (Ix[i-1][j] + e)) < 0.001) {
+      currentMatrix = 'Ix';
+    } else {
+      currentMatrix = 'M';
+    }
+    i--;
+  } else if (currentMatrix === 'Iy' && j > 0) {
+    align1 = '-' + align1;
+    align2 = s2[j-1] + align2;
+    match = ' ' + match;
+    
+    if (Math.abs(Iy[i][j] - (Iy[i][j-1] + e)) < 0.001) {
+      currentMatrix = 'Iy';
+    } else {
+      currentMatrix = 'M';
+    }
+    j--;
+  } else {
+    break;
+  }
+}
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
-      <div className="max-w-7xl mx-auto">
-        <header className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-800 mb-2">Advanced Sequence Alignment Tool</h1>
-          <p className="text-gray-600">Global & Local Sequence Alignment with Multiple Scoring Schemes</p>
-        </header>
+path.push([0, 0]);
+path.reverse();
 
-        {/* Configuration Panel */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-          <div className="flex items-center gap-2 mb-4">
-            <Info className="w-5 h-5 text-blue-600" />
-            <h2 className="text-xl font-semibold text-gray-800">Configuration</h2>
-          </div>
+return { score: finalScore, align1, align2, match, matrix: M, traceback: path };
+};
+const runAlignment = () => {
+const s1 = seq1.toUpperCase();
+const s2 = seq2.toUpperCase();
+let res;
+switch (algorithm) {
+  case 'needleman-wunsch':
+    res = needlemanWunsch(s1, s2);
+    break;
+  case 'smith-waterman':
+    res = smithWaterman(s1, s2);
+    break;
+  case 'hirschberg':
+    res = hirschberg(s1, s2);
+    break;
+  case 'gotoh':
+    res = gotoh(s1, s2);
+    break;
+  default:
+    res = needlemanWunsch(s1, s2);
+}
 
-          <div className="grid md:grid-cols-2 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Sequence 1</label>
-              <input
-                type="text"
-                value={seq1}
-                onChange={(e) => setSeq1(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
-                placeholder="Enter first sequence"
-              />
-            </div>
+setMatrix(res.matrix);
+setTraceback(res.traceback);
+setResult(res);
+setAnimationStep(0);
+};
+const startAnimation = () => {
+setIsAnimating(true);
+setIsPaused(false);
+setAnimationStep(0);
+};
+useEffect(() => {
+if (isAnimating && !isPaused && animationStep < traceback.length) {
+const timer = setTimeout(() => {
+setAnimationStep(prev => prev + 1);
+}, animationSpeed);
+return () => clearTimeout(timer);
+} else if (animationStep >= traceback.length) {
+setIsAnimating(false);
+}
+}, [isAnimating, isPaused, animationStep, traceback.length, animationSpeed]);
+const downloadCSV = () => {
+if (!result) return;
+let csv = 'Algorithm,Scoring Scheme,Score,Identity,Alignment\n';
+csv += `${algorithm},${scoringScheme},${result.score},${calculateIdentity()}%,\n`;
+csv += `Sequence 1:,${result.align1}\n`;
+csv += `Match:,${result.match}\n`;
+csv += `Sequence 2:,${result.align2}\n`;
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Sequence 2</label>
-              <input
-                type="text"
-                value={seq2}
-                onChange={(e) => setSeq2(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
-                placeholder="Enter second sequence"
-              />
-            </div>
+const blob = new Blob([csv], { type: 'text/csv' });
+const url = window.URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = 'alignment_result.csv';
+a.click();
+};
+const calculateIdentity = () => {
+if (!result) return 0;
+let matches = 0;
+for (let i = 0; i < result.match.length; i++) {
+if (result.match[i] === '|') matches++;
+}
+return ((matches / result.match.length) * 100).toFixed(1);
+};
+const calculateTime = () => {
+return (seq1.length * seq2.length * 0.001).toFixed(2);
+};
+return (
+<div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+<div className="max-w-7xl mx-auto">
+<header className="text-center mb-8">
+<h1 className="text-4xl font-bold text-gray-800 mb-2">Advanced Sequence Alignment Tool</h1>
+<p className="text-gray-600">Global & Local Sequence Alignment with Multiple Scoring Schemes</p>
+</header>
+{/* Configuration Panel */}
+    <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+      <div className="flex items-center gap-2 mb-4">
+        <Info className="w-5 h-5 text-blue-600" />
+        <h2 className="text-xl font-semibold text-gray-800">Configuration</h2>
+      </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Algorithm</label>
-              <select
-                value={algorithm}
-                onChange={(e) => setAlgorithm(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="needleman-wunsch">Needleman-Wunsch (Global)</option>
-                <option value="smith-waterman">Smith-Waterman (Local)</option>
-                <option value="hirschberg">Hirschberg (Space-efficient)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Scoring Scheme</label>
-              <select
-                value={scoringScheme}
-                onChange={(e) => setScoringScheme(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="BLOSUM62">BLOSUM62</option>
-                <option value="PAM250">PAM250</option>
-                <option value="IDENTITY">Identity Matrix</option>
-              </select>
-            </div>
-
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <input
-                  type="checkbox"
-                  checked={useAffineGap}
-                  onChange={(e) => setUseAffineGap(e.target.checked)}
-                  className="w-4 h-4 text-blue-600"
-                />
-                <label className="text-sm font-medium text-gray-700">Use Affine Gap Penalty</label>
-              </div>
-              {!useAffineGap ? (
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">Gap Penalty</label>
-                  <input
-                    type="number"
-                    value={gapPenalty}
-                    onChange={(e) => setGapPenalty(Number(e.target.value))}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-sm text-gray-600 mb-1">Gap Open</label>
-                    <input
-                      type="number"
-                      value={gapOpenPenalty}
-                      onChange={(e) => setGapOpenPenalty(Number(e.target.value))}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-600 mb-1">Gap Extend</label>
-                    <input
-                      type="number"
-                      value={gapExtendPenalty}
-                      onChange={(e) => setGapExtendPenalty(Number(e.target.value))}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <button
-            onClick={runAlignment}
-            className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg flex items-center justify-center gap-2 transition-colors"
-          >
-            <Play className="w-5 h-5" />
-            Run Alignment
-          </button>
+      <div className="grid md:grid-cols-2 gap-6">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Sequence 1</label>
+          <input
+            type="text"
+            value={seq1}
+            onChange={(e) => setSeq1(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+            placeholder="Enter first sequence"
+          />
         </div>
 
-        {/* Results */}
-        {result && (
-          <>
-            {/* Animation Controls */}
-            <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Animation Controls</h2>
-              <div className="flex items-center gap-4 mb-4">
-                <button
-                  onClick={startAnimation}
-                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-                >
-                  <Play className="w-4 h-4" />
-                  Start
-                </button>
-                <button
-                  onClick={() => setIsPaused(!isPaused)}
-                  disabled={!isAnimating}
-                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:bg-gray-400"
-                >
-                  <Pause className="w-4 h-4" />
-                  {isPaused ? 'Resume' : 'Pause'}
-                </button>
-                <button
-                  onClick={() => {
-                    setIsAnimating(false);
-                    setAnimationStep(0);
-                  }}
-                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  Reset
-                </button>
-                <div className="flex items-center gap-2 flex-1">
-                  <label className="text-sm font-medium text-gray-700">Speed:</label>
-                  <input
-                    type="range"
-                    min="100"
-                    max="2000"
-                    step="100"
-                    value={animationSpeed}
-                    onChange={(e) => setAnimationSpeed(Number(e.target.value))}
-                    className="flex-1"
-                  />
-                </div>
-                <span className="text-sm text-gray-600">
-                  Step: {animationStep} / {traceback.length}
-                </span>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Sequence 2</label>
+          <input
+            type="text"
+            value={seq2}
+            onChange={(e) => setSeq2(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+            placeholder="Enter second sequence"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Algorithm</label>
+          <select
+            value={algorithm}
+            onChange={(e) => setAlgorithm(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="needleman-wunsch">Needleman-Wunsch (Global)</option>
+            <option value="smith-waterman">Smith-Waterman (Local)</option>
+            <option value="hirschberg">Hirschberg (Space-efficient)</option>
+            <option value="gotoh">Gotoh (Affine Gap)</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Scoring Scheme</label>
+          <select
+            value={scoringScheme}
+            onChange={(e) => setScoringScheme(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="BLOSUM62">BLOSUM62</option>
+            <option value="PAM250">PAM250</option>
+            <option value="IDENTITY">Identity Matrix</option>
+          </select>
+        </div>
+
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <input
+              type="checkbox"
+              checked={useAffineGap}
+              onChange={(e) => setUseAffineGap(e.target.checked)}
+              disabled={algorithm === 'gotoh'}
+              className="w-4 h-4 text-blue-600"
+            />
+            <label className="text-sm font-medium text-gray-700">
+              Use Affine Gap Penalty {algorithm === 'gotoh' && '(Auto-enabled for Gotoh)'}
+            </label>
+          </div>
+          {(!useAffineGap && algorithm !== 'gotoh') ? (
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">Gap Penalty</label>
+              <input
+                type="number"
+                value={gapPenalty}
+                onChange={(e) => setGapPenalty(Number(e.target.value))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-sm text-gray-600 mb-1">Gap Open</label>
+                <input
+                  type="number"
+                  value={gapOpenPenalty}
+                  onChange={(e) => setGapOpenPenalty(Number(e.target.value))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-600 mb-1">Gap Extend</label>
+                <input
+                  type="number"
+                  value={gapExtendPenalty}
+                  onChange={(e) => setGapExtendPenalty(Number(e.target.value))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
               </div>
             </div>
-
-            {/* Scoring Matrix */}
-            <div className="bg-white rounded-lg shadow-lg p-6 mb-6 overflow-x-auto">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Scoring Matrix</h2>
-              <div className="inline-block min-w-full">
-                <table className="border-collapse">
-                  <thead>
-                    <tr>
-                      <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium"></th>
-                      <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">-</th>
-                      {seq2.split('').map((char, i) => (
-                        <th key={i} className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">{char}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {matrix.map((row, i) => (
-                      <tr key={i}>
-                        <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">
-                          {i === 0 ? '-' : seq1[i-1]}
-                        </th>
-                        {row.map((cell, j) => {
-                          const isInPath = animationStep > 0 && traceback.slice(0, animationStep).some(
-                            ([pi, pj]) => pi === i && pj === j
-                          );
-                          const isCurrent = animationStep > 0 && 
-                            traceback[animationStep - 1]?.[0] === i && 
-                            traceback[animationStep - 1]?.[1] === j;
-                          
-                          return (
-                            <td
-                              key={j}
-                              className={`border border-gray-300 p-2 text-sm text-center transition-colors ${
-                                isCurrent ? 'bg-green-400' :
-                                isInPath ? 'bg-blue-200' :
-                                'bg-white hover:bg-gray-50'
-                              }`}
-                            >
-                              {cell}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="mt-4 flex gap-4 text-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-blue-200 border border-gray-300"></div>
-                  <span>Traceback Path</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-green-400 border border-gray-300"></div>
-                  <span>Current</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Alignment Results */}
-            <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-semibold text-gray-800">Alignment Results</h2>
-                <button
-                  onClick={downloadCSV}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  Download CSV
-                </button>
-              </div>
-
-              <div className="grid md:grid-cols-2 gap-4 mb-6">
-                <div className="bg-blue-50 p-4 rounded-lg">
-                  <div className="text-sm text-gray-600 mb-1">Alignment Score</div>
-                  <div className="text-3xl font-bold text-blue-600">{result.score}</div>
-                </div>
-                <div className="bg-green-50 p-4 rounded-lg">
-                  <div className="text-sm text-gray-600 mb-1">Identity</div>
-                  <div className="text-3xl font-bold text-green-600">{calculateIdentity()}%</div>
-                </div>
-                <div className="bg-purple-50 p-4 rounded-lg">
-                  <div className="text-sm text-gray-600 mb-1">Time</div>
-                  <div className="text-3xl font-bold text-purple-600">{calculateTime()}ms</div>
-                </div>
-                <div className="bg-orange-50 p-4 rounded-lg">
-                  <div className="text-sm text-gray-600 mb-1">Matrix Size</div>
-                  <div className="text-3xl font-bold text-orange-600">
-                    {seq1.length + 1} × {seq2.length + 1}
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-gray-50 p-6 rounded-lg font-mono text-sm overflow-x-auto">
-                <div className="mb-2">
-                  <span className="text-gray-600">Seq1: </span>
-                  <span className="font-semibold">{result.align1}</span>
-                </div>
-                <div className="mb-2">
-                  <span className="text-gray-600">      </span>
-                  <span className="text-green-600">{result.match}</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Seq2: </span>
-                  <span className="font-semibold">{result.align2}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Algorithm Info */}
-            <div className="bg-white rounded-lg shadow-lg p-6">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Algorithm Information</h2>
-              <div className="text-gray-700 space-y-2">
-                <p><strong>Algorithm:</strong> {algorithm.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</p>
-                <p><strong>Scoring:</strong> {scoringScheme}</p>
-                <p className="text-sm text-gray-600 mt-4">
-                  {algorithm === 'needleman-wunsch' && 'Global alignment - aligns entire sequences end-to-end'}
-                  {algorithm === 'smith-waterman' && 'Local alignment - finds best matching regions within sequences'}
-                  {algorithm === 'hirschberg' && 'Space-efficient global alignment using divide-and-conquer'}
-                </p>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Quick Guide */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mt-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Quick Guide</h2>
-          <ul className="space-y-2 text-gray-700 text-sm">
-            <li><strong>Needleman-Wunsch:</strong> Global alignment - aligns entire sequences</li>
-            <li><strong>Smith-Waterman:</strong> Local alignment - finds best matching regions</li>
-            <li><strong>Hirschberg:</strong> Space-efficient variant of Needleman-Wunsch</li>
-            <li><strong>BLOSUM62:</strong> Best for distantly related proteins</li>
-            <li><strong>PAM250:</strong> Best for evolutionarily distant sequences</li>
-            <li><strong>Identity:</strong> Simple match/mismatch scoring</li>
-          </ul>
+          )}
         </div>
       </div>
-    </div>
-  );
-};
 
+      <button
+        onClick={runAlignment}
+        className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg flex items-center justify-center gap-2 transition-colors"
+      >
+        <Play className="w-5 h-5" />
+        Run Alignment
+      </button>
+    </div>
+
+    {/* Results */}
+    {result && (
+      <>
+        {/* Animation Controls */}
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">Animation Controls</h2>
+          <div className="flex items-center gap-4 mb-4">
+            <button
+              onClick={startAnimation}
+              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+            >
+              <Play className="w-4 h-4" />
+              Start
+            </button>
+            <button
+              onClick={() => setIsPaused(!isPaused)}
+              disabled={!isAnimating}
+              className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:bg-gray-400"
+            >
+              <Pause className="w-4 h-4" />
+              {isPaused ? 'Resume' : 'Pause'}
+            </button>
+            <button
+              onClick={() => {
+                setIsAnimating(false);
+                setAnimationStep(0);
+              }}
+              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Reset
+            </button>
+            <div className="flex items-center gap-2 flex-1">
+              <label className="text-sm font-medium text-gray-700">Speed:</label>
+              <input
+                type="range"
+                min="100"
+                max="2000"
+                step="100"
+                value={animationSpeed}
+                onChange={(e) => setAnimationSpeed(Number(e.target.value))}
+                className="flex-1"
+              />
+            </div>
+            <span className="text-sm text-gray-600">
+              Step: {animationStep} / {traceback.length}
+            </span>
+          </div>
+        </div>
+
+        {/* Scoring Matrix */}
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-6 overflow-x-auto">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">Scoring Matrix</h2>
+          <div className="inline-block min-w-full">
+            <table className="border-collapse">
+              <thead>
+                <tr>
+                  <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium"></th>
+                  <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">-</th>
+                  {seq2.split('').map((char, i) => (
+                    <th key={i} className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">{char}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {matrix.map((row, i) => (
+                  <tr key={i}>
+                    <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">
+                      {i === 0 ? '-' : seq1[i-1]}
+                    </th>
+                    {row.map((cell, j) => {
+                      const isInPath = animationStep > 0 && traceback.slice(0, animationStep).some(
+                        ([pi, pj]) => pi === i && pj === j
+                      );
+                      const isCurrent = animationStep > 0 && 
+                        traceback[animationStep - 1]?.[0] === i && 
+                        traceback[animationStep - 1]?.[1] === j;
+                      
+                      return (
+                        <td
+                          key={j}
+                          className={`border border-gray-300 p-2 text-sm text-center transition-colors ${
+                            isCurrent ? 'bg-green-400' :
+                            isInPath ? 'bg-blue-200' :
+                            'bg-white hover:bg-gray-50'
+                          }`}
+                        >
+                          {cell === -Infinity ? '-∞' : typeof cell === 'number' ? cell.toFixed(0) : cell}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-4 flex gap-4 text-sm">
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-blue-200 border border-gray-300"></div>
+              <span>Traceback Path</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-green-400 border border-gray-300"></div>
+              <span>Current</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Alignment Results */}
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold text-gray-800">Alignment Results</h2>
+            <button
+              onClick={downloadCSV}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+            >
+              <Download className="w-4 h-4" />
+              Download CSV
+            </button>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4 mb-6">
+            <div className="bg-blue-50 p-4 rounded-lg">
+              <div className="text-sm text-gray-600 mb-1">Alignment Score</div>
+              <div className="text-3xl font-bold text-blue-600">{result.score.toFixed(2)}</div>
+            </div>
+            <div className="bg-green-50 p-4 rounded-lg">
+              <div className="text-sm text-gray-600 mb-1">Identity</div>
+              <div className="text-3xl font-bold text-green-600">{calculateIdentity()}%</div>
+            </div>
+            <div className="bg-purple-50 p-4 rounded-lg">
+              <div className="text-sm text-gray-600 mb-1">Time</div>
+              <div className="text-3xl font-bold text-purple-600">{calculateTime()}ms</div>
+            </div>
+            <div className="bg-orange-50 p-4 rounded-lg">
+              <div className="text-sm text-gray-600 mb-1">Matrix Size</div>
+              <div className="text-3xl font-bold text-orange-600">
+                {seq1.length + 1} × {seq2.length + 1}
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-gray-50 p-6 rounded-lg font-mono text-sm overflow-x-auto">
+            <div className="mb-2">
+              <span className="text-gray-600">Seq1: </span>
+              <span className="font-semibold">{result.align1}</span>
+            </div>
+            <div className="mb-2">
+              <span className="text-gray-600">      </span>
+              <span className="text-green-600">{result.match}</span>
+            </div>
+            <div>
+              <span className="text-gray-600">Seq2: </span>
+              <span className="font-semibold">{result.align2}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Algorithm Info */}
+        <div className="bg-white rounded-lg shadow-lg p-6">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">Algorithm Information</h2>
+          <div className="text-gray-700 space-y-2">
+            <p><strong>Algorithm:</strong> {algorithm.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</p>
+            <p><strong>Scoring:</strong> {scoringScheme}</p>
+            <p className="text-sm text-gray-600 mt-4">
+              {algorithm === 'needleman-wunsch' && 'Global alignment - aligns entire sequences end-to-end'}
+              {algorithm === 'smith-waterman' && 'Local alignment - finds best matching regions within sequences'}
+              {algorithm === 'hirschberg' && 'Space-efficient global alignment using divide-and-conquer'}
+              {algorithm === 'gotoh' && 'Global alignment with affine gap penalties - distinguishes gap opening from gap extension'}
+            </p>
+          </div>
+        </div>
+      </>
+    )}
+
+    {/* Quick Guide */}
+    <div className="bg-white rounded-lg shadow-lg p-6 mt-6">
+      <h2 className="text-xl font-semibold text-gray-800 mb-4">Quick Guide</h2>
+      <ul className="space-y-2 text-gray-700 text-sm">
+        <li><strong>Needleman-Wunsch:</strong> Global alignment - aligns entire sequences</li>
+        <li><strong>Smith-Waterman:</strong> Local alignment - finds best matching regions</li>
+        <li><strong>Hirschberg:</strong> Space-efficient variant of Needleman-Wunsch</li>
+        <li><strong>Gotoh:</strong> Global alignment with affine gap penalties for more biological accuracy</li>
+        <li><strong>BLOSUM62:</strong> Best for distantly related proteins</li>
+        <li><strong>PAM250:</strong> Best for evolutionarily distant sequences</li>
+        <li><strong>Identity:</strong> Simple match/mismatch scoring</li>
+      </ul>
+    </div>
+  </div>
+</div>
+);
+};
 export default SequenceAlignmentTool;
