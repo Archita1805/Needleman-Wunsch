@@ -17,6 +17,7 @@ const SequenceAlignmentTool = () => {
   const [isPaused, setIsPaused] = useState(false);
   const [matrix, setMatrix] = useState([]);
   const [traceback, setTraceback] = useState([]);
+  const [twoRowSteps, setTwoRowSteps] = useState([]); // For Hirschberg 2-row animation
 
   // Scoring matrices
   const BLOSUM62 = {
@@ -192,8 +193,157 @@ const SequenceAlignmentTool = () => {
   };
 
   const hirschberg = (s1, s2) => {
-    // Simplified version - full implementation would use divide-and-conquer
-    return needlemanWunsch(s1, s2);
+    // Space-efficient alignment using divide-and-conquer
+    const allSteps = []; // Store all 2-row computations for visualization
+    
+    const scoreLastRow = (seq1, seq2, storeSteps = false) => {
+      const m = seq1.length;
+      const n = seq2.length;
+      let prev = Array(n + 1).fill(0);
+      let curr = Array(n + 1).fill(0);
+      
+      for (let j = 0; j <= n; j++) prev[j] = j * gapPenalty;
+      
+      if (storeSteps) {
+        allSteps.push({ prev: [...prev], curr: [...curr], rowIndex: 0 });
+      }
+      
+      for (let i = 1; i <= m; i++) {
+        curr[0] = i * gapPenalty;
+        for (let j = 1; j <= n; j++) {
+          const match = prev[j-1] + getScore(seq1[i-1], seq2[j-1]);
+          const del = prev[j] + gapPenalty;
+          const ins = curr[j-1] + gapPenalty;
+          curr[j] = Math.max(match, del, ins);
+        }
+        if (storeSteps) {
+          allSteps.push({ prev: [...prev], curr: [...curr], rowIndex: i });
+        }
+        [prev, curr] = [curr, prev];
+      }
+      return prev;
+    };
+    
+    // First pass: compute forward scores and store steps for visualization
+    scoreLastRow(s1, s2, true);
+    
+    const hirschbergRec = (seq1, seq2) => {
+      if (seq1.length === 0) {
+        return { align1: '-'.repeat(seq2.length), align2: seq2, match: ' '.repeat(seq2.length) };
+      }
+      if (seq2.length === 0) {
+        return { align1: seq1, align2: '-'.repeat(seq1.length), match: ' '.repeat(seq1.length) };
+      }
+      if (seq1.length === 1) {
+        let bestJ = 0;
+        let bestScore = gapPenalty * seq2.length + gapPenalty;
+        
+        for (let j = 0; j < seq2.length; j++) {
+          const leftGaps = j;
+          const rightGaps = seq2.length - j - 1;
+          const score = getScore(seq1[0], seq2[j]) + (leftGaps + rightGaps) * gapPenalty;
+          if (score > bestScore) {
+            bestScore = score;
+            bestJ = j;
+          }
+        }
+        
+        const left = '-'.repeat(bestJ);
+        const right = '-'.repeat(seq2.length - bestJ - 1);
+        return {
+          align1: left + seq1[0] + right,
+          align2: seq2,
+          match: ' '.repeat(bestJ) + (seq1[0] === seq2[bestJ] ? '|' : ' ') + ' '.repeat(seq2.length - bestJ - 1)
+        };
+      }
+      
+      const mid = Math.floor(seq1.length / 2);
+      const seq1Left = seq1.substring(0, mid);
+      const seq1Right = seq1.substring(mid);
+      
+      const scoreL = scoreLastRow(seq1Left, seq2, false);
+      const scoreR = scoreLastRow(seq1Right.split('').reverse().join(''), seq2.split('').reverse().join(''), false).reverse();
+      
+      let bestJ = 0;
+      let bestScore = scoreL[0] + scoreR[0];
+      for (let j = 1; j <= seq2.length; j++) {
+        const score = scoreL[j] + scoreR[j];
+        if (score > bestScore) {
+          bestScore = score;
+          bestJ = j;
+        }
+      }
+      
+      const leftResult = hirschbergRec(seq1Left, seq2.substring(0, bestJ));
+      const rightResult = hirschbergRec(seq1Right, seq2.substring(bestJ));
+      
+      return {
+        align1: leftResult.align1 + rightResult.align1,
+        align2: leftResult.align2 + rightResult.align2,
+        match: leftResult.match + rightResult.match
+      };
+    };
+    
+    const result = hirschbergRec(s1, s2);
+    
+    // Calculate score using the actual scoring matrix
+    let score = 0;
+    for (let i = 0; i < result.align1.length; i++) {
+      if (result.align1[i] === '-' || result.align2[i] === '-') {
+        score += gapPenalty;
+      } else {
+        score += getScore(result.align1[i], result.align2[i]);
+      }
+    }
+    
+    // Create visualization matrix showing only 2 rows at a time
+    const visualMatrix = Array(s1.length + 1).fill(null).map(() => Array(s2.length + 1).fill(null));
+    
+    // Mark which cells are "computed" during the 2-row processing
+    if (allSteps.length > 0) {
+      // Show initial row
+      for (let j = 0; j <= s2.length; j++) {
+        visualMatrix[0][j] = j * gapPenalty;
+      }
+      
+      // Show that we only keep 2 rows in memory at any time
+      // We'll mark the last 2 rows as "visible" in memory
+      if (s1.length > 0) {
+        visualMatrix[s1.length][0] = s1.length * gapPenalty;
+        const lastStep = allSteps[allSteps.length - 1];
+        for (let j = 0; j <= s2.length; j++) {
+          visualMatrix[s1.length][j] = lastStep.prev[j];
+        }
+      }
+      
+      if (s1.length > 1) {
+        visualMatrix[s1.length - 1][0] = (s1.length - 1) * gapPenalty;
+      }
+    }
+    
+    // Traceback path (simplified for visualization)
+    const path = [[0, 0]];
+    let i = 0, j = 0;
+    for (let k = 0; k < result.align1.length; k++) {
+      if (result.align1[k] !== '-' && result.align2[k] !== '-') {
+        i++; j++;
+      } else if (result.align1[k] === '-') {
+        j++;
+      } else {
+        i++;
+      }
+      path.push([i, j]);
+    }
+    
+    return { 
+      score, 
+      align1: result.align1, 
+      align2: result.align2, 
+      match: result.match, 
+      matrix: visualMatrix, 
+      traceback: path,
+      twoRowSteps: allSteps // Store the 2-row computation steps
+    };
   };
 
   const gotoh = (s1, s2) => {
@@ -227,436 +377,544 @@ const SequenceAlignmentTool = () => {
     
     // Find best score
     const finalScore = Math.max(M[m][n], Ix[m][n], Iy[m][n]);
+    
     // Traceback
-let i = m, j = n;
-let align1 = '', align2 = '', match = '';
-const path = [];
-let currentMatrix = M[m][n] >= Ix[m][n] && M[m][n] >= Iy[m][n] ? 'M' : (Ix[m][n] >= Iy[m][n] ? 'Ix' : 'Iy');
+    let i = m, j = n;
+    let align1 = '', align2 = '', match = '';
+    const path = [];
+    let currentMatrix = M[m][n] >= Ix[m][n] && M[m][n] >= Iy[m][n] ? 'M' : (Ix[m][n] >= Iy[m][n] ? 'Ix' : 'Iy');
 
-while (i > 0 || j > 0) {
-  path.push([i, j]);
-  
-  if (currentMatrix === 'M' && i > 0 && j > 0) {
-    align1 = s1[i-1] + align1;
-    align2 = s2[j-1] + align2;
-    match = (s1[i-1] === s2[j-1] ? '|' : ' ') + match;
-    
-    const prevScore = M[i][j] - getScore(s1[i-1], s2[j-1]);
-    if (Math.abs(prevScore - M[i-1][j-1]) < 0.001) currentMatrix = 'M';
-    else if (Math.abs(prevScore - Ix[i-1][j-1]) < 0.001) currentMatrix = 'Ix';
-    else currentMatrix = 'Iy';
-    
-    i--; j--;
-  } else if (currentMatrix === 'Ix' && i > 0) {
-    align1 = s1[i-1] + align1;
-    align2 = '-' + align2;
-    match = ' ' + match;
-    
-    if (Math.abs(Ix[i][j] - (Ix[i-1][j] + e)) < 0.001) {
-      currentMatrix = 'Ix';
-    } else {
-      currentMatrix = 'M';
+    while (i > 0 || j > 0) {
+      path.push([i, j]);
+      
+      if (currentMatrix === 'M' && i > 0 && j > 0) {
+        align1 = s1[i-1] + align1;
+        align2 = s2[j-1] + align2;
+        match = (s1[i-1] === s2[j-1] ? '|' : ' ') + match;
+        
+        const prevScore = M[i][j] - getScore(s1[i-1], s2[j-1]);
+        if (Math.abs(prevScore - M[i-1][j-1]) < 0.001) currentMatrix = 'M';
+        else if (Math.abs(prevScore - Ix[i-1][j-1]) < 0.001) currentMatrix = 'Ix';
+        else currentMatrix = 'Iy';
+        
+        i--; j--;
+      } else if (currentMatrix === 'Ix' && i > 0) {
+        align1 = s1[i-1] + align1;
+        align2 = '-' + align2;
+        match = ' ' + match;
+        
+        if (Math.abs(Ix[i][j] - (Ix[i-1][j] + e)) < 0.001) {
+          currentMatrix = 'Ix';
+        } else {
+          currentMatrix = 'M';
+        }
+        i--;
+      } else if (currentMatrix === 'Iy' && j > 0) {
+        align1 = '-' + align1;
+        align2 = s2[j-1] + align2;
+        match = ' ' + match;
+        
+        if (Math.abs(Iy[i][j] - (Iy[i][j-1] + e)) < 0.001) {
+          currentMatrix = 'Iy';
+        } else {
+          currentMatrix = 'M';
+        }
+        j--;
+      } else {
+        break;
+      }
     }
-    i--;
-  } else if (currentMatrix === 'Iy' && j > 0) {
-    align1 = '-' + align1;
-    align2 = s2[j-1] + align2;
-    match = ' ' + match;
-    
-    if (Math.abs(Iy[i][j] - (Iy[i][j-1] + e)) < 0.001) {
-      currentMatrix = 'Iy';
-    } else {
-      currentMatrix = 'M';
+
+    path.push([0, 0]);
+    path.reverse();
+
+    return { score: finalScore, align1, align2, match, matrix: M, traceback: path };
+  };
+
+  const runAlignment = () => {
+    const s1 = seq1.toUpperCase();
+    const s2 = seq2.toUpperCase();
+    let res;
+    switch (algorithm) {
+      case 'needleman-wunsch':
+        res = needlemanWunsch(s1, s2);
+        break;
+      case 'smith-waterman':
+        res = smithWaterman(s1, s2);
+        break;
+      case 'hirschberg':
+        res = hirschberg(s1, s2);
+        break;
+      case 'gotoh':
+        res = gotoh(s1, s2);
+        break;
+      default:
+        res = needlemanWunsch(s1, s2);
     }
-    j--;
-  } else {
-    break;
-  }
-}
 
-path.push([0, 0]);
-path.reverse();
+    setMatrix(res.matrix);
+    setTraceback(res.traceback);
+    setTwoRowSteps(res.twoRowSteps || []);
+    setResult(res);
+    setAnimationStep(0);
+  };
 
-return { score: finalScore, align1, align2, match, matrix: M, traceback: path };
-};
-const runAlignment = () => {
-const s1 = seq1.toUpperCase();
-const s2 = seq2.toUpperCase();
-let res;
-switch (algorithm) {
-  case 'needleman-wunsch':
-    res = needlemanWunsch(s1, s2);
-    break;
-  case 'smith-waterman':
-    res = smithWaterman(s1, s2);
-    break;
-  case 'hirschberg':
-    res = hirschberg(s1, s2);
-    break;
-  case 'gotoh':
-    res = gotoh(s1, s2);
-    break;
-  default:
-    res = needlemanWunsch(s1, s2);
-}
+  const startAnimation = () => {
+    setIsAnimating(true);
+    setIsPaused(false);
+    setAnimationStep(0);
+  };
 
-setMatrix(res.matrix);
-setTraceback(res.traceback);
-setResult(res);
-setAnimationStep(0);
-};
-const startAnimation = () => {
-setIsAnimating(true);
-setIsPaused(false);
-setAnimationStep(0);
-};
-useEffect(() => {
-if (isAnimating && !isPaused && animationStep < traceback.length) {
-const timer = setTimeout(() => {
-setAnimationStep(prev => prev + 1);
-}, animationSpeed);
-return () => clearTimeout(timer);
-} else if (animationStep >= traceback.length) {
-setIsAnimating(false);
-}
-}, [isAnimating, isPaused, animationStep, traceback.length, animationSpeed]);
-const downloadCSV = () => {
-if (!result) return;
-let csv = 'Algorithm,Scoring Scheme,Score,Identity,Alignment\n';
-csv += `${algorithm},${scoringScheme},${result.score},${calculateIdentity()}%,\n`;
-csv += `Sequence 1:,${result.align1}\n`;
-csv += `Match:,${result.match}\n`;
-csv += `Sequence 2:,${result.align2}\n`;
+  useEffect(() => {
+    if (isAnimating && !isPaused) {
+      const maxSteps = algorithm === 'hirschberg' && twoRowSteps.length > 0 
+        ? twoRowSteps.length 
+        : traceback.length;
+      
+      if (animationStep < maxSteps) {
+        const timer = setTimeout(() => {
+          setAnimationStep(prev => prev + 1);
+        }, animationSpeed);
+        return () => clearTimeout(timer);
+      } else {
+        setIsAnimating(false);
+      }
+    }
+  }, [isAnimating, isPaused, animationStep, traceback.length, twoRowSteps.length, animationSpeed, algorithm]);
 
-const blob = new Blob([csv], { type: 'text/csv' });
-const url = window.URL.createObjectURL(blob);
-const a = document.createElement('a');
-a.href = url;
-a.download = 'alignment_result.csv';
-a.click();
-};
-const calculateIdentity = () => {
-if (!result) return 0;
-let matches = 0;
-for (let i = 0; i < result.match.length; i++) {
-if (result.match[i] === '|') matches++;
-}
-return ((matches / result.match.length) * 100).toFixed(1);
-};
-const calculateTime = () => {
-return (seq1.length * seq2.length * 0.001).toFixed(2);
-};
-return (
-<div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
-<div className="max-w-7xl mx-auto">
-<header className="text-center mb-8">
-<h1 className="text-4xl font-bold text-gray-800 mb-2">Advanced Sequence Alignment Tool</h1>
-<p className="text-gray-600">Global & Local Sequence Alignment with Multiple Scoring Schemes</p>
-</header>
-{/* Configuration Panel */}
-    <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-      <div className="flex items-center gap-2 mb-4">
-        <Info className="w-5 h-5 text-blue-600" />
-        <h2 className="text-xl font-semibold text-gray-800">Configuration</h2>
-      </div>
+  const downloadCSV = () => {
+    if (!result) return;
+    let csv = 'Algorithm,Scoring Scheme,Score,Identity,Alignment\n';
+    csv += `${algorithm},${scoringScheme},${result.score},${calculateIdentity()}%,\n`;
+    csv += `Sequence 1:,${result.align1}\n`;
+    csv += `Match:,${result.match}\n`;
+    csv += `Sequence 2:,${result.align2}\n`;
 
-      <div className="grid md:grid-cols-2 gap-6">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Sequence 1</label>
-          <input
-            type="text"
-            value={seq1}
-            onChange={(e) => setSeq1(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
-            placeholder="Enter first sequence"
-          />
-        </div>
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'alignment_result.csv';
+    a.click();
+  };
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Sequence 2</label>
-          <input
-            type="text"
-            value={seq2}
-            onChange={(e) => setSeq2(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
-            placeholder="Enter second sequence"
-          />
-        </div>
+  const calculateIdentity = () => {
+    if (!result) return 0;
+    let matches = 0;
+    for (let i = 0; i < result.match.length; i++) {
+      if (result.match[i] === '|') matches++;
+    }
+    return ((matches / result.match.length) * 100).toFixed(1);
+  };
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Algorithm</label>
-          <select
-            value={algorithm}
-            onChange={(e) => setAlgorithm(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="needleman-wunsch">Needleman-Wunsch (Global)</option>
-            <option value="smith-waterman">Smith-Waterman (Local)</option>
-            <option value="hirschberg">Hirschberg (Space-efficient)</option>
-            <option value="gotoh">Gotoh (Affine Gap)</option>
-          </select>
-        </div>
+  const calculateTime = () => {
+    return (seq1.length * seq2.length * 0.001).toFixed(2);
+  };
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Scoring Scheme</label>
-          <select
-            value={scoringScheme}
-            onChange={(e) => setScoringScheme(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="BLOSUM62">BLOSUM62</option>
-            <option value="PAM250">PAM250</option>
-            <option value="IDENTITY">Identity Matrix</option>
-          </select>
-        </div>
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+      <div className="max-w-7xl mx-auto">
+        <header className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-gray-800 mb-2">Advanced Sequence Alignment Tool</h1>
+          <p className="text-gray-600">Global & Local Sequence Alignment with Multiple Scoring Schemes</p>
+        </header>
 
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <input
-              type="checkbox"
-              checked={useAffineGap}
-              onChange={(e) => setUseAffineGap(e.target.checked)}
-              disabled={algorithm === 'gotoh'}
-              className="w-4 h-4 text-blue-600"
-            />
-            <label className="text-sm font-medium text-gray-700">
-              Use Affine Gap Penalty {algorithm === 'gotoh' && '(Auto-enabled for Gotoh)'}
-            </label>
+        {/* Configuration Panel */}
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Info className="w-5 h-5 text-blue-600" />
+            <h2 className="text-xl font-semibold text-gray-800">Configuration</h2>
           </div>
-          {(!useAffineGap && algorithm !== 'gotoh') ? (
+
+          <div className="grid md:grid-cols-2 gap-6">
             <div>
-              <label className="block text-sm text-gray-600 mb-1">Gap Penalty</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Sequence 1</label>
               <input
-                type="number"
-                value={gapPenalty}
-                onChange={(e) => setGapPenalty(Number(e.target.value))}
+                type="text"
+                value={seq1}
+                onChange={(e) => setSeq1(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+                placeholder="Enter first sequence"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Sequence 2</label>
+              <input
+                type="text"
+                value={seq2}
+                onChange={(e) => setSeq2(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+                placeholder="Enter second sequence"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Algorithm</label>
+              <select
+                value={algorithm}
+                onChange={(e) => setAlgorithm(e.target.value)}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
+              >
+                <option value="needleman-wunsch">Needleman-Wunsch (Global)</option>
+                <option value="smith-waterman">Smith-Waterman (Local)</option>
+                <option value="hirschberg">Hirschberg (Space-efficient)</option>
+                <option value="gotoh">Gotoh (Affine Gap)</option>
+              </select>
             </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">Gap Open</label>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Scoring Scheme</label>
+              <select
+                value={scoringScheme}
+                onChange={(e) => setScoringScheme(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="BLOSUM62">BLOSUM62</option>
+                <option value="PAM250">PAM250</option>
+                <option value="IDENTITY">Identity Matrix</option>
+              </select>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-2 mb-2">
                 <input
-                  type="number"
-                  value={gapOpenPenalty}
-                  onChange={(e) => setGapOpenPenalty(Number(e.target.value))}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  type="checkbox"
+                  checked={useAffineGap}
+                  onChange={(e) => setUseAffineGap(e.target.checked)}
+                  disabled={algorithm === 'gotoh'}
+                  className="w-4 h-4 text-blue-600"
                 />
+                <label className="text-sm font-medium text-gray-700">
+                  Use Affine Gap Penalty {algorithm === 'gotoh' && '(Auto-enabled for Gotoh)'}
+                </label>
               </div>
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">Gap Extend</label>
-                <input
-                  type="number"
-                  value={gapExtendPenalty}
-                  onChange={(e) => setGapExtendPenalty(Number(e.target.value))}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+              {(!useAffineGap && algorithm !== 'gotoh') ? (
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">Gap Penalty</label>
+                  <input
+                    type="number"
+                    value={gapPenalty}
+                    onChange={(e) => setGapPenalty(Number(e.target.value))}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-sm text-gray-600 mb-1">Gap Open</label>
+                    <input
+                      type="number"
+                      value={gapOpenPenalty}
+                      onChange={(e) => setGapOpenPenalty(Number(e.target.value))}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-600 mb-1">Gap Extend</label>
+                    <input
+                      type="number"
+                      value={gapExtendPenalty}
+                      onChange={(e) => setGapExtendPenalty(Number(e.target.value))}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <button
+            onClick={runAlignment}
+            className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg flex items-center justify-center gap-2 transition-colors"
+          >
+            <Play className="w-5 h-5" />
+            Run Alignment
+          </button>
+        </div>
+
+        {/* Results */}
+        {result && (
+          <>
+            {/* Animation Controls */}
+            <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Animation Controls</h2>
+              <div className="flex items-center gap-4 mb-4">
+                <button
+                  onClick={startAnimation}
+                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+                >
+                  <Play className="w-4 h-4" />
+                  Start
+                </button>
+                <button
+                  onClick={() => setIsPaused(!isPaused)}
+                  disabled={!isAnimating}
+                  className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:bg-gray-400"
+                >
+                  <Pause className="w-4 h-4" />
+                  {isPaused ? 'Resume' : 'Pause'}
+                </button>
+                <button
+                  onClick={() => {
+                    setIsAnimating(false);
+                    setAnimationStep(0);
+                  }}
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  Reset
+                </button>
+                <div className="flex items-center gap-2 flex-1">
+                  <label className="text-sm font-medium text-gray-700">Speed:</label>
+                  <input
+                    type="range"
+                    min="100"
+                    max="2000"
+                    step="100"
+                    value={animationSpeed}
+                    onChange={(e) => setAnimationSpeed(Number(e.target.value))}
+                    className="flex-1"
+                  />
+                </div>
+                <span className="text-sm text-gray-600">
+                  Step: {animationStep} / {algorithm === 'hirschberg' && twoRowSteps.length > 0 ? twoRowSteps.length : traceback.length}
+                </span>
               </div>
             </div>
-          )}
+
+            {/* Scoring Matrix */}
+            <div className="bg-white rounded-lg shadow-lg p-6 mb-6 overflow-x-auto">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">
+                {algorithm === 'hirschberg' ? 'Hirschberg 2-Row Computation (Space-Efficient)' : 'Scoring Matrix'}
+              </h2>
+              
+              {algorithm === 'hirschberg' && twoRowSteps.length > 0 ? (
+                // Hirschberg 2-row visualization
+                <div>
+                  <div className="mb-4 p-4 bg-blue-50 rounded-lg">
+                    <p className="text-sm text-gray-700">
+                      <strong>Hirschberg Algorithm:</strong> Only keeps 2 rows in memory at a time (previous and current).
+                      This visualization shows how the algorithm processes one row at a time, discarding old rows to save space.
+                    </p>
+                  </div>
+                  
+                  {animationStep > 0 && animationStep <= twoRowSteps.length && (
+                    <div className="inline-block min-w-full mb-6">
+                      <div className="mb-2 text-sm font-semibold text-gray-700">
+                        Processing Row {twoRowSteps[animationStep - 1].rowIndex} of {seq1.length}
+                      </div>
+                      <table className="border-collapse">
+                        <thead>
+                          <tr>
+                            <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium"></th>
+                            <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">-</th>
+                            {seq2.split('').map((char, i) => (
+                              <th key={i} className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">{char}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {/* Previous Row */}
+                          <tr>
+                            <th className="border border-gray-300 bg-blue-100 p-2 text-sm font-medium">
+                              Prev ({twoRowSteps[animationStep - 1].rowIndex - 1})
+                            </th>
+                            {twoRowSteps[animationStep - 1].prev.map((cell, j) => (
+                              <td
+                                key={j}
+                                className="border border-gray-300 p-2 text-sm text-center bg-blue-100"
+                              >
+                                {cell.toFixed(0)}
+                              </td>
+                            ))}
+                          </tr>
+                          {/* Current Row */}
+                          <tr>
+                            <th className="border border-gray-300 bg-green-100 p-2 text-sm font-medium">
+                              Curr ({twoRowSteps[animationStep - 1].rowIndex})
+                            </th>
+                            {twoRowSteps[animationStep - 1].curr.map((cell, j) => (
+                              <td
+                                key={j}
+                                className="border border-gray-300 p-2 text-sm text-center bg-green-100"
+                              >
+                                {cell.toFixed(0)}
+                              </td>
+                            ))}
+                          </tr>
+                        </tbody>
+                      </table>
+                      <div className="mt-4 flex gap-4 text-sm">
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-blue-100 border border-gray-300"></div>
+                          <span>Previous Row (in memory)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-green-100 border border-gray-300"></div>
+                          <span>Current Row (being computed)</span>
+                        </div>
+                      </div>
+                      <div className="mt-4 p-3 bg-yellow-50 rounded border border-yellow-200">
+                        <p className="text-sm text-gray-700">
+                          💡 <strong>Space Efficiency:</strong> After computing the current row, the previous row is discarded. 
+                          Only 2 rows × {seq2.length + 1} cells = {2 * (seq2.length + 1)} cells in memory, 
+                          instead of {(seq1.length + 1) * (seq2.length + 1)} cells for full matrix!
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {animationStep === 0 && (
+                    <div className="text-center p-8 bg-gray-50 rounded-lg">
+                      <p className="text-gray-600">Click "Start" to see the 2-row computation animation</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                // Standard matrix visualization for other algorithms
+                <div className="inline-block min-w-full">
+                  <table className="border-collapse">
+                    <thead>
+                      <tr>
+                        <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium"></th>
+                        <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">-</th>
+                        {seq2.split('').map((char, i) => (
+                          <th key={i} className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">{char}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {matrix.map((row, i) => (
+                        <tr key={i}>
+                          <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">
+                            {i === 0 ? '-' : seq1[i-1]}
+                          </th>
+                          {row.map((cell, j) => {
+                            const isInPath = animationStep > 0 && traceback.slice(0, animationStep).some(
+                              ([pi, pj]) => pi === i && pj === j
+                            );
+                            const isCurrent = animationStep > 0 && 
+                              traceback[animationStep - 1]?.[0] === i && 
+                              traceback[animationStep - 1]?.[1] === j;
+                            
+                            return (
+                              <td
+                                key={j}
+                                className={`border border-gray-300 p-2 text-sm text-center transition-colors ${
+                                  isCurrent ? 'bg-green-400' :
+                                  isInPath ? 'bg-blue-200' :
+                                  cell === null ? 'bg-gray-200' :
+                                  'bg-white hover:bg-gray-50'
+                                }`}
+                              >
+                                {cell === null ? '-' : cell === -Infinity ? '-∞' : typeof cell === 'number' ? cell.toFixed(0) : cell}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="mt-4 flex gap-4 text-sm">
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 bg-blue-200 border border-gray-300"></div>
+                      <span>Traceback Path</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-4 h-4 bg-green-400 border border-gray-300"></div>
+                      <span>Current</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Alignment Results */}
+            <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-semibold text-gray-800">Alignment Results</h2>
+                <button
+                  onClick={downloadCSV}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  Download CSV
+                </button>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-4 mb-6">
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <div className="text-sm text-gray-600 mb-1">Alignment Score</div>
+                  <div className="text-3xl font-bold text-blue-600">{result.score.toFixed(2)}</div>
+                </div>
+                <div className="bg-green-50 p-4 rounded-lg">
+                  <div className="text-sm text-gray-600 mb-1">Identity</div>
+                  <div className="text-3xl font-bold text-green-600">{calculateIdentity()}%</div>
+                </div>
+                <div className="bg-purple-50 p-4 rounded-lg">
+                  <div className="text-sm text-gray-600 mb-1">Time Complexity</div>
+                  <div className="text-2xl font-bold text-purple-600">
+                    {algorithm === 'hirschberg' ? 'O(mn)' : 'O(mn)'}
+                  </div>
+                </div>
+                <div className="bg-orange-50 p-4 rounded-lg">
+                  <div className="text-sm text-gray-600 mb-1">Space Complexity</div>
+                  <div className="text-2xl font-bold text-orange-600">
+                    {algorithm === 'hirschberg' ? 'O(m+n)' : 'O(mn)'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-gray-50 p-6 rounded-lg font-mono text-sm overflow-x-auto">
+                <div className="mb-2">
+                  <span className="text-gray-600">Seq1: </span>
+                  <span className="font-semibold">{result.align1}</span>
+                </div>
+                <div className="mb-2">
+                  <span className="text-gray-600">      </span>
+                  <span className="text-green-600">{result.match}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Seq2: </span>
+                  <span className="font-semibold">{result.align2}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Algorithm Info */}
+            <div className="bg-white rounded-lg shadow-lg p-6">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">Algorithm Information</h2>
+              <div className="text-gray-700 space-y-2">
+                <p><strong>Algorithm:</strong> {algorithm.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</p>
+                <p><strong>Scoring:</strong> {scoringScheme}</p>
+                <p className="text-sm text-gray-600 mt-4">
+                  {algorithm === 'needleman-wunsch' && 'Global alignment - aligns entire sequences end-to-end'}
+                  {algorithm === 'smith-waterman' && 'Local alignment - finds best matching regions within sequences'}
+                  {algorithm === 'hirschberg' && 'Space-efficient global alignment using divide-and-conquer. Uses only O(m+n) space instead of O(mn) by computing only one row at a time.'}
+                  {algorithm === 'gotoh' && 'Global alignment with affine gap penalties - distinguishes gap opening from gap extension'}
+                </p>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Quick Guide */}
+        <div className="bg-white rounded-lg shadow-lg p-6 mt-6">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">Quick Guide</h2>
+          <ul className="space-y-2 text-gray-700 text-sm">
+            <li><strong>Needleman-Wunsch:</strong> Global alignment - aligns entire sequences</li>
+            <li><strong>Smith-Waterman:</strong> Local alignment - finds best matching regions</li>
+            <li><strong>Hirschberg:</strong> Space-efficient variant of Needleman-Wunsch (O(m+n) space)</li>
+            <li><strong>Gotoh:</strong> Global alignment with affine gap penalties for more biological accuracy</li>
+            <li><strong>BLOSUM62:</strong> Best for distantly related proteins</li>
+            <li><strong>PAM250:</strong> Best for evolutionarily distant sequences</li>
+            <li><strong>Identity:</strong> Simple match/mismatch scoring</li>
+          </ul>
         </div>
       </div>
-
-      <button
-        onClick={runAlignment}
-        className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg flex items-center justify-center gap-2 transition-colors"
-      >
-        <Play className="w-5 h-5" />
-        Run Alignment
-      </button>
     </div>
-
-    {/* Results */}
-    {result && (
-      <>
-        {/* Animation Controls */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Animation Controls</h2>
-          <div className="flex items-center gap-4 mb-4">
-            <button
-              onClick={startAnimation}
-              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-            >
-              <Play className="w-4 h-4" />
-              Start
-            </button>
-            <button
-              onClick={() => setIsPaused(!isPaused)}
-              disabled={!isAnimating}
-              className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:bg-gray-400"
-            >
-              <Pause className="w-4 h-4" />
-              {isPaused ? 'Resume' : 'Pause'}
-            </button>
-            <button
-              onClick={() => {
-                setIsAnimating(false);
-                setAnimationStep(0);
-              }}
-              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-            >
-              <RotateCcw className="w-4 h-4" />
-              Reset
-            </button>
-            <div className="flex items-center gap-2 flex-1">
-              <label className="text-sm font-medium text-gray-700">Speed:</label>
-              <input
-                type="range"
-                min="100"
-                max="2000"
-                step="100"
-                value={animationSpeed}
-                onChange={(e) => setAnimationSpeed(Number(e.target.value))}
-                className="flex-1"
-              />
-            </div>
-            <span className="text-sm text-gray-600">
-              Step: {animationStep} / {traceback.length}
-            </span>
-          </div>
-        </div>
-
-        {/* Scoring Matrix */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-6 overflow-x-auto">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Scoring Matrix</h2>
-          <div className="inline-block min-w-full">
-            <table className="border-collapse">
-              <thead>
-                <tr>
-                  <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium"></th>
-                  <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">-</th>
-                  {seq2.split('').map((char, i) => (
-                    <th key={i} className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">{char}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {matrix.map((row, i) => (
-                  <tr key={i}>
-                    <th className="border border-gray-300 bg-gray-100 p-2 text-sm font-medium">
-                      {i === 0 ? '-' : seq1[i-1]}
-                    </th>
-                    {row.map((cell, j) => {
-                      const isInPath = animationStep > 0 && traceback.slice(0, animationStep).some(
-                        ([pi, pj]) => pi === i && pj === j
-                      );
-                      const isCurrent = animationStep > 0 && 
-                        traceback[animationStep - 1]?.[0] === i && 
-                        traceback[animationStep - 1]?.[1] === j;
-                      
-                      return (
-                        <td
-                          key={j}
-                          className={`border border-gray-300 p-2 text-sm text-center transition-colors ${
-                            isCurrent ? 'bg-green-400' :
-                            isInPath ? 'bg-blue-200' :
-                            'bg-white hover:bg-gray-50'
-                          }`}
-                        >
-                          {cell === -Infinity ? '-∞' : typeof cell === 'number' ? cell.toFixed(0) : cell}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mt-4 flex gap-4 text-sm">
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-blue-200 border border-gray-300"></div>
-              <span>Traceback Path</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 bg-green-400 border border-gray-300"></div>
-              <span>Current</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Alignment Results */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold text-gray-800">Alignment Results</h2>
-            <button
-              onClick={downloadCSV}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-            >
-              <Download className="w-4 h-4" />
-              Download CSV
-            </button>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-4 mb-6">
-            <div className="bg-blue-50 p-4 rounded-lg">
-              <div className="text-sm text-gray-600 mb-1">Alignment Score</div>
-              <div className="text-3xl font-bold text-blue-600">{result.score.toFixed(2)}</div>
-            </div>
-            <div className="bg-green-50 p-4 rounded-lg">
-              <div className="text-sm text-gray-600 mb-1">Identity</div>
-              <div className="text-3xl font-bold text-green-600">{calculateIdentity()}%</div>
-            </div>
-            <div className="bg-purple-50 p-4 rounded-lg">
-              <div className="text-sm text-gray-600 mb-1">Time</div>
-              <div className="text-3xl font-bold text-purple-600">{calculateTime()}ms</div>
-            </div>
-            <div className="bg-orange-50 p-4 rounded-lg">
-              <div className="text-sm text-gray-600 mb-1">Matrix Size</div>
-              <div className="text-3xl font-bold text-orange-600">
-                {seq1.length + 1} × {seq2.length + 1}
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-gray-50 p-6 rounded-lg font-mono text-sm overflow-x-auto">
-            <div className="mb-2">
-              <span className="text-gray-600">Seq1: </span>
-              <span className="font-semibold">{result.align1}</span>
-            </div>
-            <div className="mb-2">
-              <span className="text-gray-600">      </span>
-              <span className="text-green-600">{result.match}</span>
-            </div>
-            <div>
-              <span className="text-gray-600">Seq2: </span>
-              <span className="font-semibold">{result.align2}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Algorithm Info */}
-        <div className="bg-white rounded-lg shadow-lg p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Algorithm Information</h2>
-          <div className="text-gray-700 space-y-2">
-            <p><strong>Algorithm:</strong> {algorithm.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}</p>
-            <p><strong>Scoring:</strong> {scoringScheme}</p>
-            <p className="text-sm text-gray-600 mt-4">
-              {algorithm === 'needleman-wunsch' && 'Global alignment - aligns entire sequences end-to-end'}
-              {algorithm === 'smith-waterman' && 'Local alignment - finds best matching regions within sequences'}
-              {algorithm === 'hirschberg' && 'Space-efficient global alignment using divide-and-conquer'}
-              {algorithm === 'gotoh' && 'Global alignment with affine gap penalties - distinguishes gap opening from gap extension'}
-            </p>
-          </div>
-        </div>
-      </>
-    )}
-
-    {/* Quick Guide */}
-    <div className="bg-white rounded-lg shadow-lg p-6 mt-6">
-      <h2 className="text-xl font-semibold text-gray-800 mb-4">Quick Guide</h2>
-      <ul className="space-y-2 text-gray-700 text-sm">
-        <li><strong>Needleman-Wunsch:</strong> Global alignment - aligns entire sequences</li>
-        <li><strong>Smith-Waterman:</strong> Local alignment - finds best matching regions</li>
-        <li><strong>Hirschberg:</strong> Space-efficient variant of Needleman-Wunsch</li>
-        <li><strong>Gotoh:</strong> Global alignment with affine gap penalties for more biological accuracy</li>
-        <li><strong>BLOSUM62:</strong> Best for distantly related proteins</li>
-        <li><strong>PAM250:</strong> Best for evolutionarily distant sequences</li>
-        <li><strong>Identity:</strong> Simple match/mismatch scoring</li>
-      </ul>
-    </div>
-  </div>
-</div>
-);
+  );
 };
+
 export default SequenceAlignmentTool;
